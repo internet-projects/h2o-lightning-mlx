@@ -1,0 +1,27 @@
+#!/bin/bash
+# H2O-Lightning-4B on Apple Silicon: the MLX facade (a vLLM stand-in) + the OFFICIAL shim, unmodified.
+#   MODEL=model ./serve.sh            # bf16 (the official weights)          -> http://127.0.0.1:8741/v1/systemone
+#   MODEL=mlx-q8 ./serve.sh           # an 8-bit MLX conversion
+# Optional authenticated front door:  H2O_API_KEY=... FRONT_PORT=8742 ./serve.sh
+# Env: FACADE_PORT (8743), PORT (8741, the shim), SHIM_NOUL_FLOOR (unset = as shipped; 0 = routing mode),
+#      FACADE_IDLE_UNLOAD_S (0 = keep the weights resident), H2O_HOSTS (front bind addresses, default 127.0.0.1)
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
+PY="${PY:-$HERE/.venv/bin/python}"; MODEL="${MODEL:-model}"
+FACADE_PORT="${FACADE_PORT:-8743}"; PORT="${PORT:-8741}"
+[ -f model/h2o_lightning_shim.py ] || { echo "run ./setup.sh first (downloads the official repo into ./model)"; exit 1; }
+"$PY" mlx_vllm_facade.py --model "$MODEL" --port "$FACADE_PORT" & P1=$!
+"$PY" model/h2o_lightning_shim.py --config model/serve_config.json --vllm "http://127.0.0.1:$FACADE_PORT" \
+  --host 127.0.0.1 --port "$PORT" & P2=$!
+PIDS="$P1 $P2"
+if [ -n "${FRONT_PORT:-}" ]; then
+  H2O_SHIM="127.0.0.1:$PORT" "$PY" h2o_front.py --port "$FRONT_PORT" & PIDS="$PIDS $!"
+fi
+trap 'kill $PIDS 2>/dev/null; wait' EXIT INT TERM
+until curl -sf "http://127.0.0.1:$PORT/health" >/dev/null; do
+  for p in $PIDS; do kill -0 $p 2>/dev/null || { echo "a process exited during start-up"; exit 1; }; done
+  sleep 2
+done
+echo "H2O-Lightning-4B (MLX, $MODEL) ready: http://127.0.0.1:$PORT/v1/systemone"
+# bash 3.2 (macOS) has no `wait -n`
+while true; do for p in $PIDS; do kill -0 $p 2>/dev/null || exit 1; done; sleep 5; done

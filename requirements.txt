@@ -1,0 +1,8 @@
+mlx>=0.32.3
+mlx-vlm>=0.7.6
+transformers>=5.19.0
+huggingface_hub>=1.33
+pillow
+numpy
+# only for scripts/parity_check.py (the PyTorch reference):
+# torch>=2.14 torchvision
