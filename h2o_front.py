@@ -232,7 +232,7 @@ def main():
         try:
             servers.append(Server((host, a.port), H))
             sys.stderr.write(f"front: listening on http://{host}:{a.port} (shim {SHIM})\n")
-        except OSError as e:          # e.g. network not up yet at boot: exit so launchd retries
+        except OSError as e:          # e.g. Tailscale not up yet at boot: exit so launchd retries
             sys.stderr.write(f"front: cannot bind {host}:{a.port}: {e}\n")
             time.sleep(10)
             sys.exit(1)

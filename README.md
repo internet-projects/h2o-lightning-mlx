@@ -69,8 +69,16 @@ H2O_API_KEY=… FRONT_PORT=8742 ./serve.sh
 
 The request is `{"state", "question": {...}}`. The response is `{type, choice|noul|score, probabilities, confidence, input_tokens, latency_ms}`. Set `H2O_DECISION_LOG=<dir>` to keep one JSON-lines file per day of answer statistics (type, option count, top probability; never the record text). `launchd/` has an example LaunchAgent.
 
-### Routing a low-confidence answer (example)
-H2O answers in one pass, so its confidence is the signal to act on. `examples/escalate_example.py` shows one pattern: if the top probability is below a threshold, ask a second, larger judge and keep its answer only when it is confident. The example is generic, and the thresholds are the ones we use in production, not universal values. See the note on calibration below.
+### Is the confidence usable?
+VitaminC test split, 400 items (200 supported, 133 refuted, 67 not enough info), with the evidence sentence embedded in about 650 words of other text. H2O only, all three MLX builds:
+
+| Build | Accuracy | Brier (lower is better) | Calibration error (ECE) | AUROC |
+|---|---|---|---|---|
+| bf16 | 81.2% | 0.135 | 0.057 | 0.891 |
+| 8-bit | 81.2% | 0.134 | 0.055 | 0.892 |
+| 4-bit | 82.8% | 0.134 | 0.068 | 0.888 |
+
+Accuracy differences are within noise (about ±4 points at 400 items). With the 8-bit build, accepting only answers at confidence 0.9 or higher covered 58% of the items at 90% accuracy. More in the [NetProjects article](https://netprojects.com) (link to be added at publication).
 
 ## Prefix cache
 
@@ -87,12 +95,12 @@ uv pip install --python .venv/bin/python torch torchvision
 ```
 
 ## Notes and limits
-- **Calibration is what H2O is for.** JevBench measures accuracy. Confidence values are only useful if you check them on your own data. We did this on our own claim-checking traffic, not on JevBench, and the routing thresholds in `examples/` come from that work. We have not published that dataset.
+- **Calibration is what H2O is for.** JevBench measures accuracy. Confidence values are only useful if you check them on your own data.
 - **Serialized.** One MLX lock serves one forward pass at a time. That suits a single Mac, not high concurrency.
 - **Long prompts.** They are pre-filled in 4,096-token chunks. Chunking changes log-probabilities by at most a few hundredths (bf16 arithmetic).
 - **Idle release.** The weights load on first use and are released after `FACADE_IDLE_UNLOAD_S` idle seconds (0 keeps them resident).
 - **Tested versions.** mlx 0.32.3, mlx-vlm 0.7.6, transformers 5.19.0, macOS 26.7.
-- **Scope.** This repo is the decision model and its serving path. It does not include any product harness or the second-opinion service we run in production.
+- **Scope.** This repo is the decision model and its serving path. It does not include any product harness.
 
 ## Credits and license
 - Model: [H2O-Lightning-4B](https://huggingface.co/h2oai/h2o-lightning-4b) by H2O.ai (Apache-2.0), built on [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) by the Qwen team (Apache-2.0). The shim and `serve_config.json` are H2O.ai's and are downloaded from their repo, not redistributed here.
