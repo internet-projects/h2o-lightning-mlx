@@ -2,7 +2,9 @@
 
 Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text and images both work. The **official shim runs byte-for-byte unmodified**.
 
-This is, as far as we could find on 11 October 2026, the first public MLX build of H2O-Lightning-4B. Please tell us if you know of another.
+This is, as far as we could find on 12 October 2026, the first public MLX build of H2O-Lightning-4B. Please tell us if you know of another.
+
+Prebuilt weights on Hugging Face: [netprojects/h2o-lightning-4b-mlx-q8](https://huggingface.co/netprojects/h2o-lightning-4b-mlx-q8) (8-bit) and [netprojects/h2o-lightning-4b-mlx-q4](https://huggingface.co/netprojects/h2o-lightning-4b-mlx-q4) (4-bit).
 
 Published by [NetProjects](https://netprojects.com) (Internet Projects Ltd). Not affiliated with H2O.ai.
 
@@ -78,7 +80,7 @@ VitaminC test split, 400 items (200 supported, 133 refuted, 67 not enough info),
 | 8-bit | 81.2% | 0.134 | 0.055 | 0.892 |
 | 4-bit | 82.8% | 0.134 | 0.068 | 0.888 |
 
-Accuracy differences are within noise (about ±4 points at 400 items). With the 8-bit build, accepting only answers at confidence 0.9 or higher covered 58% of the items at 90% accuracy. More in the [NetProjects article](https://netprojects.com) (link to be added at publication).
+Accuracy differences are within noise (about ±4 points at 400 items). With the 8-bit build, accepting only answers at confidence 0.9 or higher covered 58% of the items at 90% accuracy. More in the [NetProjects article](https://netprojects.com/insights/h2o-lightning-4b-on-apple-silicon-mlx).
 
 ## Prefix cache
 
