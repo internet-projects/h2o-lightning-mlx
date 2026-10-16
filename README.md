@@ -23,16 +23,17 @@ JevBench public set (231 items), JevBench's own CLI at commit `bb05a33`, `--adap
 |---|---|---|---|---|---|
 | model card (vLLM, NVIDIA) | 9.1 GB | **205 / 231** | 48/48 · 71/72 · 86/111 | — | — |
 | bf16, official weights (MLX) | 9.1 GB | 204 / 231 | 48/48 · 71/72 · 85/111 | — | — |
-| MLX 8-bit (g64) | 4.8 GB | **205 / 231** | 48/48 · 71/72 · 86/111 | 229 / 231 | 0.006 / 0.019 |
-| MLX 4-bit (g64) | 2.9 GB | 207 / 231 | 48/48 · 72/72 · 87/111 | 220 / 231 | 0.039 / 0.179 |
+| MLX 8-bit (g64) | 5.1 GB | **205 / 231** | 48/48 · 71/72 · 86/111 | 229 / 231 | 0.006 / 0.019 |
+| MLX 4-bit (g64) | 3.0 GB | 207 / 231 | 48/48 · 72/72 · 87/111 | 220 / 231 | 0.039 / 0.179 |
 
 - **bf16 vs the card:** the one-item gap is `hard-sol-c-judge_hard-13`. It is one of the five near-tie items the model card names as sensitive to GPU numerics. The card's four expected near-tie misses miss here too.
-- **8-bit** is effectively lossless. It changes 2 of 231 answers, both on near-ties, and halves the memory. **This is the recommended build.**
+- **8-bit** stays very close to the original weights (mean probability drift 0.006). It changes 2 of 231 answers, both on near-ties, and halves the memory. **This is the recommended build.**
 - **4-bit** scores higher here, but that is noise. 11 answers flip in both directions, and the probabilities drift by up to 0.18 at p95. The model's selling point is calibration, so use 4-bit only when memory matters more than calibrated confidence.
 
 Parity against a PyTorch reference (the same safetensors through `transformers`, float32 head) on 20 JevBench prompts:
 - The top answer agreed on 20 of 20. The maximum probability difference was 0.016 (mean 0.003).
 - On the receipt image, the image tokens are identical (481 tokens, grid 1×42×36), and the probability difference is 0.001.
+- Image check through the unchanged shim, on all three builds: H2O's receipt example gives the same answers as the model card shows, and a small generated-image set (counting circles, colours, reading a table) passes on bf16 and 8-bit (80 of 80 answers right); 4-bit is slightly weaker at counting (28 of 30). This is not a reproduction of H2O's image benchmark.
 
 Latency is for one 2,000-token record and one question, serial. The run is prefill-bound, so quantization barely changes it:
 
@@ -60,7 +61,7 @@ curl -s http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -
      "criteria": {"p1": "Revenue path fully down", "p2": "Degraded but working", "p3": "Cosmetic"}}}}'
 ```
 
-The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
+The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.2.3, which `setup.sh` pins. The 8-bit build was also checked with H2O's `main` shim as of 16 October 2026 (`test_shim.py` passes, 205 / 231 on JevBench, same image results). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
 
 ### Optional front door
 `h2o_front.py` adds an API key and a `/v1/decisions` route for clients that send one question at a time:
