@@ -7,11 +7,15 @@
 set -x
 D="$(cd "$(dirname "$0")/.." && pwd)"; cd $D
 M=${1:-model}; LABEL=${2:-bf16}; ATT=${3:-two-way}
-case "$ATT" in one-way) MODE=causal;; two-way) MODE=bidirectional;; *) echo "mode must be one-way or two-way"; exit 1;; esac
+case "$ATT" in
+  one-way) unset SHIM_TWO_WAY_FLAG; export SHIM_ATTENTION_MODE=causal;;
+  two-way) export SHIM_TWO_WAY_FLAG=1 SHIM_ATTENTION_MODE=bidirectional;;
+  *) echo "mode must be one-way or two-way"; exit 1;;
+esac
 OUT=$D/bench/jevbench-$LABEL-$ATT-$(date +%Y%m%d-%H%M); mkdir -p $OUT
 .venv/bin/python -c "import jevbench" 2>/dev/null || uv pip install --python .venv/bin/python -e ./jevbench
 FACADE_IDLE_UNLOAD_S=0 .venv/bin/python mlx_vllm_facade.py --model $M --port 8753 --preload > $OUT/facade.log 2>&1 & F=$!
-SHIM_TWO_WAY_FLAG=1 SHIM_ATTENTION_MODE=$MODE .venv/bin/python model/h2o_lightning_shim.py --config model/serve_config.json --vllm http://127.0.0.1:8753 --port 8741 > $OUT/shim.log 2>&1 & S=$!
+.venv/bin/python model/h2o_lightning_shim.py --config model/serve_config.json --vllm http://127.0.0.1:8753 --port 8741 > $OUT/shim.log 2>&1 & S=$!
 trap 'kill $F $S 2>/dev/null' EXIT
 for i in $(seq 1 120); do
   code=$(curl -s -o $OUT/warmup.json -w '%{http_code}' http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -d '{"state": "warm-up","questions": {"decision": {"type": "noul", "instructions": "Is this a warm-up?","criteria": {"true": "yes", "false": "no"}}}}')

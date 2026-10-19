@@ -24,6 +24,7 @@ assert len(ids) == 2000, len(ids)
 eng.logprobs_at_next(ids, list(range(8)))
 xs = []
 for _ in range(10):
+    eng.snapshot = eng.last_ids = None        # time the full 2,000-token pass, not a prefix-cache hit
     t = time.perf_counter(); eng.logprobs_at_next(ids, list(range(8))); xs.append(time.perf_counter() - t)
 xs.sort()
 eng.logprobs_at_next(ids, list(range(8)), bidirectional=True)

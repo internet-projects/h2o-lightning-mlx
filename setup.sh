@@ -12,17 +12,17 @@ for d in model mlx-q*; do
   have="$(cat "$d/.h2o_revision" 2>/dev/null || echo 'v1.2.x (no revision stamp)')"
   if [ "$have" != "$REV" ]; then
     echo "$d/ was built from H2O $have, this setup pins $REV."
-    echo "Remove the old builds first:  rm -rf model mlx-q8 mlx-q4 && ./setup.sh $*"
+    echo "Remove the old builds first:  rm -rf model mlx-q8 mlx-q4 && ./setup.sh ${*:-}"
     exit 1
   fi
 done
 [ -x .venv/bin/python ] || uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
+mkdir -p model && echo "$REV" > model/.h2o_revision     # stamped first, so an interrupted download resumes
 .venv/bin/hf download h2oai/h2o-lightning-4b --revision "$REV" --local-dir model \
   --exclude "adapter/*" --exclude "assets/*" --exclude "vllm_patches/*" --exclude "routing_reproducibility/*"
-echo "$REV" > model/.h2o_revision
 (cd model && ../.venv/bin/python test_shim.py)
-for b in "$@"; do
+for b in ${@+"$@"}; do
   bits=${b#q}; [ -f "mlx-q$bits/config.json" ] && continue
   .venv/bin/python -m mlx_vlm convert --hf-path model --mlx-path "mlx-q$bits" -q --q-bits "$bits" --q-group-size 64
   echo "$REV" > "mlx-q$bits/.h2o_revision"
