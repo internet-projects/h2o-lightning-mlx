@@ -81,6 +81,21 @@ def main():
     print(f"HF login: {who.get('name')} (orgs: {', '.join(orgs) or '-'})")
     if "netprojects" not in orgs and who.get("name") != "netprojects":
         sys.exit("this HF login cannot write to the netprojects org (hf auth login with a token that can)")
+    tok = (who.get("auth") or {}).get("accessToken") or {}
+    role = tok.get("role")
+    if role == "read":
+        sys.exit("this HF token is read-only: make a Write token (or a fine-grained one with write access to netprojects "
+                 "repos) at https://huggingface.co/settings/tokens, then: .venv/bin/hf auth login")
+    if role == "fineGrained":
+        fg = tok.get("fineGrained") or {}
+        ok = any(("repo.write" in (sc.get("permissions") or []))
+                 and (sc.get("entity") or {}).get("name") in ("netprojects", "h2o-lightning-4b-mlx-q8", "h2o-lightning-4b-mlx-q4",
+                                                               "netprojects/h2o-lightning-4b-mlx-q8", "netprojects/h2o-lightning-4b-mlx-q4")
+                 for sc in fg.get("scoped") or [])
+        if not ok:
+            sys.exit("this fine-grained HF token has no repo write access for netprojects: edit it at "
+                     "https://huggingface.co/settings/tokens (Org permissions -> netprojects -> write to repos), or use a Write token")
+    print(f"HF token: {role or 'unknown role'}")
     fetch()
     if sh("git", "rev-parse", "--abbrev-ref", "HEAD") != BRANCH:
         sys.exit(f"check out {BRANCH} first")
