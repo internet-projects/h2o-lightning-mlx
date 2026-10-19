@@ -7,6 +7,7 @@
 set -x
 D="$(cd "$(dirname "$0")/.." && pwd)"; cd $D
 M=${1:-model}; LABEL=${2:-bf16}; ATT=${3:-two-way}
+[ -f "$M/config.json" ] || { echo "no model at '$M' (usage: scripts/bench_jevbench.sh <model dir> <label> <one-way|two-way>)"; exit 1; }
 case "$ATT" in
   one-way) unset SHIM_TWO_WAY_FLAG; export SHIM_ATTENTION_MODE=causal;;
   two-way) export SHIM_TWO_WAY_FLAG=1 SHIM_ATTENTION_MODE=bidirectional;;
@@ -20,6 +21,7 @@ trap 'kill $F $S 2>/dev/null' EXIT
 for i in $(seq 1 120); do
   code=$(curl -s -o $OUT/warmup.json -w '%{http_code}' http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -d '{"state": "warm-up","questions": {"decision": {"type": "noul", "instructions": "Is this a warm-up?","criteria": {"true": "yes", "false": "no"}}}}')
   [ "$code" = 200 ] && break
+  kill -0 $F 2>/dev/null && kill -0 $S 2>/dev/null || { echo "the facade or shim exited:"; tail -5 $OUT/facade.log $OUT/shim.log; exit 1; }
   grep -q "probe answers\|ignores attention_mode" $OUT/warmup.json 2>/dev/null && break   # the two-way check failed
   sleep 3
 done
