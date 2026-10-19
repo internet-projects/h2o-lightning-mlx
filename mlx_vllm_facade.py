@@ -9,6 +9,13 @@ It implements only what the shim calls on vLLM:
     POST /v1/chat/completions  -> the same read-out for a chat with images (continue_final_message)
     GET  /health
 
+TWO-WAY READING (H2O v1.3+): a completion or chat request with `"vllm_xargs": {"attention_mode": "bidirectional"}`
+runs the prompt with bidirectional attention on the full-attention layers (the Gated DeltaNet layers stay causal) and
+reads the answer slot exactly as one-way does. This is the per-request flag the shim sends when started with
+SHIM_TWO_WAY_FLAG=1 (upstream's one-engine mode); before its first two-way answer the shim checks this engine's
+answers to three fixed probes against the release's recorded two-way answers. A two-way prompt is read in one pass,
+without the prefix cache (an earlier token's state depends on the later tokens). "causal" or no flag = one-way.
+
 Nothing is ever sampled. One forward pass per request; the hidden state at the last position goes through the tied
 output head in float32 (the model's config.json asks for "head_dtype": "float32", which vLLM honours), and the reply
 carries log_softmax over the whole vocabulary for the requested ids -- vLLM's raw log-probabilities.
@@ -48,7 +55,41 @@ HEAD_SLICE = int(os.environ.get("FACADE_HEAD_SLICE", "32768"))
 CACHE_LIMIT_GB = float(os.environ.get("FACADE_CACHE_LIMIT_GB", "1"))
 PREFIX_MIN = int(os.environ.get("FACADE_PREFIX_MIN", "256"))     # 0 turns the prefix cache off
 CONTEXT_MSG = "This model's maximum context length is {m} tokens. However, you requested {n} tokens."
+ATTENTION_MODES = {"causal": False, "one-way": False, "bidirectional": True, "two-way": True}
 _DATA_URI = re.compile(r"data:(image/[A-Za-z0-9.+-]+);base64,(.*)", re.S | re.I)
+
+
+# Two-way attention: mlx-vlm's qwen3_5 language model builds one mask for all full-attention layers in
+# _create_qwen3_5_attention_mask; while _BIDIR is set (only ever under Engine.lock) that mask is None, i.e. every
+# position attends to every position. The Gated DeltaNet layers use their own (causal, recurrent) path, untouched.
+_BIDIR = False
+
+
+def _install_two_way_patch():
+    import mlx_vlm.models.qwen3_5.language as L
+    orig = getattr(L, "_create_qwen3_5_attention_mask", None)
+    if orig is None:
+        raise RuntimeError("mlx-vlm's qwen3_5 has no _create_qwen3_5_attention_mask: two-way reading needs updating "
+                           "for this mlx-vlm version")
+    if getattr(orig, "_two_way", False):
+        return
+
+    def mask(h, cache):
+        return None if _BIDIR else orig(h, cache)
+    mask._two_way = True
+    L._create_qwen3_5_attention_mask = mask
+
+
+def attention_mode(body):
+    """True for a two-way (bidirectional) request: vLLM's per-request `vllm_xargs.attention_mode`."""
+    x = body.get("vllm_xargs") or {}
+    m = x.get("attention_mode") if isinstance(x, dict) else None
+    if m is None:
+        return False
+    key = str(m).strip().lower().replace("_", "-")
+    if key not in ATTENTION_MODES:
+        raise HTTPError(400, f"vllm_xargs.attention_mode must be one of {sorted(ATTENTION_MODES)}")
+    return ATTENTION_MODES[key]
 
 
 class HTTPError(Exception):
@@ -83,6 +124,7 @@ class Engine:
         from mlx_vlm import load
         t0 = time.time()
         model, processor = load(self.path)
+        _install_two_way_patch()
         self.model, self.processor = model, processor
         self.loads += 1
         lm = self.model.language_model
@@ -134,8 +176,10 @@ class Engine:
         return text, urls
 
     # ------------------------------------------------------------------ the read-out
-    def _final_hidden(self, ids, pixel_values=None, grid=None):
-        """Normalised hidden state at the last position, shape (hidden,)."""
+    def _final_hidden(self, ids, pixel_values=None, grid=None, bidirectional=False):
+        """Normalised hidden state at the last position, shape (hidden,). bidirectional: the full-attention layers
+        see the whole prompt (one pass, no prefix cache)."""
+        global _BIDIR
         lm = self.model.language_model
         input_ids = mx.array([ids], dtype=mx.int32)
         if pixel_values is not None:
@@ -149,6 +193,15 @@ class Engine:
             pos = mx.broadcast_to(pos[None], (3,) + tuple(pos.shape))
         n = len(ids)
         start, cache, split = 0, None, None
+        if bidirectional:
+            cache = lm.make_cache()
+            _BIDIR = True
+            try:
+                h = lm.model(input_ids, inputs_embeds=emb, cache=cache, position_ids=pos)
+                mx.eval(h)
+            finally:
+                _BIDIR = False
+            return h[0, -1]
         if pixel_values is None and PREFIX_MIN:
             # PREFIX CACHE (text only). Several questions about one record share a long head; vLLM computes it once
             # (prefix caching). Here: if this prompt shares >= PREFIX_MIN tokens with the saved snapshot, restore it;
@@ -194,10 +247,10 @@ class Engine:
             c.state = [self._copy(a) for a in st]
         return cache
 
-    def logprobs_at_next(self, ids, wanted, pixel_values=None, grid=None):
+    def logprobs_at_next(self, ids, wanted, pixel_values=None, grid=None, bidirectional=False):
         if len(ids) + 1 > MAX_MODEL_LEN:
             raise HTTPError(400, CONTEXT_MSG.format(m=MAX_MODEL_LEN, n=len(ids) + 1))
-        h = self._final_hidden(ids, pixel_values, grid)
+        h = self._final_hidden(ids, pixel_values, grid, bidirectional)
         head = self.embed if self.lm_head is None else self.lm_head
         W = head.weight
         q = getattr(head, "scales", None) is not None          # a quantized (q8/q4) MLX checkpoint
@@ -278,10 +331,11 @@ class Engine:
         if int(body.get("max_tokens", 16)) != 1:
             raise HTTPError(400, "this server only reads the next token (max_tokens must be 1)")
         wanted = [int(i) for i in (body.get("logprob_token_ids") or [])]
+        bidir = attention_mode(body)
         with self.lock:
             self.ensure_loaded()
             self.last_used = time.time()
-            lps, top, top_lp = self.logprobs_at_next(ids, wanted)
+            lps, top, top_lp = self.logprobs_at_next(ids, wanted, bidirectional=bidir)
             self.last_used = time.time()
         top_map = {f"token_id:{i}": v for i, v in zip(wanted, lps)}
         return {"id": "cmpl-mlx", "object": "text_completion", "created": int(time.time()), "model": SERVED_NAME,
@@ -298,16 +352,17 @@ class Engine:
                                       cont, body.get("chat_template_kwargs"))
         wanted = [int(i) for i in (body.get("logprob_token_ids") or [])]
         max_px = int((body.get("mm_processor_kwargs") or {}).get("max_pixels") or DEFAULT_MAX_PIXELS)
+        bidir = attention_mode(body)
         images = self.load_images(urls) if urls else []
         with self.lock:
             self.ensure_loaded()
             self.last_used = time.time()
             if urls:
                 ids, pv, grid = self.process_images(text, images, max_px)
-                lps, top, top_lp = self.logprobs_at_next(ids, wanted, pv, grid)
+                lps, top, top_lp = self.logprobs_at_next(ids, wanted, pv, grid, bidirectional=bidir)
             else:
                 ids = self.encode(text, body.get("add_special_tokens", False))
-                lps, top, top_lp = self.logprobs_at_next(ids, wanted)
+                lps, top, top_lp = self.logprobs_at_next(ids, wanted, bidirectional=bidir)
             self.last_used = time.time()
         content = [{"token": f"token_id:{top}", "logprob": top_lp,
                     "top_logprobs": [{"token": f"token_id:{i}", "logprob": v} for i, v in zip(wanted, lps)]}]
@@ -349,7 +404,8 @@ def make_handler(engine):
             if p in ("/health", "/healthz"):
                 return self.send(200, {"ok": True, "model": SERVED_NAME, "loaded": engine.model is not None,
                                        "loads": engine.loads, "backend": "mlx", "head_fp32": engine.head_fp32,
-                                       "prefix_hits": engine.prefix_hits, "prefix_min": PREFIX_MIN})
+                                       "prefix_hits": engine.prefix_hits, "prefix_min": PREFIX_MIN,
+                                       "attention_modes": ["causal", "bidirectional"]})
             if p == "/v1/models":
                 return self.send(200, {"object": "list", "data": [{
                     "id": SERVED_NAME, "object": "model", "owned_by": "mlx-facade", "max_model_len": MAX_MODEL_LEN}]})

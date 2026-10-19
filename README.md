@@ -50,7 +50,7 @@ Items around 650 tokens (the JevBench average) take about 0.06 s. These timings 
 ```bash
 brew install uv
 git clone https://github.com/internet-projects/h2o-lightning-mlx && cd h2o-lightning-mlx
-./setup.sh q8            # venv + official H2O repo at v1.2.3 (shim, config, weights) + an 8-bit conversion; runs test_shim.py
+./setup.sh q8            # venv + official H2O repo at v1.3.1 (shim, config, weights) + an 8-bit conversion; runs test_shim.py
 MODEL=mlx-q8 ./serve.sh  # or ./serve.sh for the official bf16 weights
 ```
 
