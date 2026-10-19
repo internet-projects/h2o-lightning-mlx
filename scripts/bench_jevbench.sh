@@ -4,6 +4,7 @@
 #   scripts/bench_jevbench.sh [model dir] [label] [one-way|two-way]     (default: model bf16 two-way)
 # Two-way: the shim's one-engine flag; its probe check against the release's two-way answers runs at the warm-up
 # and a failure stops the run (the warm-up never gets a 200). Paths may contain spaces.
+# PROBE_TOLERANCE=0.49 relaxes that check for a measurement only (results are not H2O-verified; label them so).
 set -x
 D="$(cd "$(dirname "$0")/.." && pwd)"; cd "$D" || exit 1
 M="${1:-model}"; LABEL="${2:-bf16}"; ATT="${3:-two-way}"
@@ -13,10 +14,15 @@ case "$ATT" in
   two-way) export SHIM_TWO_WAY_FLAG=1 SHIM_ATTENTION_MODE=bidirectional;;
   *) echo "mode must be one-way or two-way"; exit 1;;
 esac
-OUT="$D/bench/jevbench-$LABEL-$ATT-$(date +%Y%m%d-%H%M)"; mkdir -p "$OUT"
+OUT="$D/bench/jevbench-$LABEL-$ATT${PROBE_TOLERANCE:+-unverified}-$(date +%Y%m%d-%H%M)"; mkdir -p "$OUT"
+CFG=model/serve_config.json
+if [ -n "${PROBE_TOLERANCE:-}" ]; then
+  CFG="$OUT/serve_config.json"
+  .venv/bin/python -c "import json,sys; c=json.load(open('model/serve_config.json')); c['two_way']['probe_tolerance']=float(sys.argv[2]); json.dump(c,open(sys.argv[1],'w'))" "$CFG" "$PROBE_TOLERANCE" || exit 1
+fi
 .venv/bin/python -c "import jevbench" 2>/dev/null || uv pip install --python .venv/bin/python -e ./jevbench
 FACADE_IDLE_UNLOAD_S=0 .venv/bin/python mlx_vllm_facade.py --model "$M" --port 8753 --preload > "$OUT/facade.log" 2>&1 & F=$!
-.venv/bin/python model/h2o_lightning_shim.py --config model/serve_config.json --vllm http://127.0.0.1:8753 --port 8741 > "$OUT/shim.log" 2>&1 & S=$!
+.venv/bin/python model/h2o_lightning_shim.py --config "$CFG" --vllm http://127.0.0.1:8753 --port 8741 > "$OUT/shim.log" 2>&1 & S=$!
 trap 'kill $F $S 2>/dev/null' EXIT
 code=000
 for i in $(seq 1 120); do
