@@ -4,7 +4,7 @@ in_proj_a / in_proj_b and the attention output gate inside the full-attention q_
 
     .venv/bin/python scripts/convert_mixed.py --body 4 --attn 8 --gates bf16 --out mlx-q4g
       --body   bits for everything else (MLP, DeltaNet projections, embedding/tied head): 4, 5, 6 or 8
-      --attn   bits for the 8 full-attention layers (q/k/v/o), or "body"
+      --attn   bits for the 8 full-attention layers (q/k/v/o): 4, 5, 6, 8, "bf16" (unquantized) or "body"
       --gates  bf16 (keep in_proj_a/in_proj_b unquantized) or "body"
 Affine, group size 64. The vision tower stays unquantized (mlx-vlm default).
 """
@@ -18,7 +18,7 @@ ap.add_argument("--attn", default="body")
 ap.add_argument("--gates", default="bf16", choices=["bf16", "body"])
 ap.add_argument("--out", required=True)
 a = ap.parse_args()
-attn = a.body if a.attn == "body" else int(a.attn)
+attn = a.body if a.attn == "body" else (a.attn if a.attn == "bf16" else int(a.attn))
 if os.path.exists(a.out):
     sys.exit(f"{a.out} exists; remove it first")
 counts = {}
@@ -33,6 +33,8 @@ def pred(path, module, config=None):
         return False
     bits = attn if ".self_attn." in path else a.body
     counts[bits] = counts.get(bits, 0) + 1
+    if bits == "bf16":
+        return False
     return {"group_size": 64, "bits": bits}
 
 convert(hf_path="model", mlx_path=a.out, quantize=True, q_group_size=64, q_bits=a.body, quant_predicate=pred)

@@ -12,10 +12,11 @@ recipe() {   # name -> converter args
     q5g)  echo "--body 5 --attn 8 --gates bf16" ;;
     q4g)  echo "--body 4 --attn 8 --gates bf16" ;;   # q4 + gates bf16 + full attention 8-bit
     q4g1) echo "--body 4 --attn body --gates bf16" ;; # q4 + gates bf16 only
+    q4a16) echo "--body 4 --attn bf16 --gates bf16" ;; # diagnostic: full attention + gates unquantized
     *) return 1 ;;
   esac
 }
-VARIANTS=("$@"); [ ${#VARIANTS[@]} -gt 0 ] || VARIANTS=(q4 q8g q6g q5g q4g q4g1)
+VARIANTS=("$@"); [ ${#VARIANTS[@]} -gt 0 ] || VARIANTS=(q4 q8g q6g q5g q4g q4g1 q4a16)
 for v in "${VARIANTS[@]}"; do
   dir="mlx-$v"; [ "$v" = bf16 ] && dir=model
   if args=$(recipe "$v"); then :
