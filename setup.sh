@@ -1,7 +1,6 @@
 #!/bin/bash
 # One-time setup: a venv with mlx-vlm, the official H2O repo (shim, config, weights) at the pinned revision,
-# and optional 8-/4-bit MLX conversions.   ./setup.sh [q8] [q4] [q4m]
-# q4m = mlx-vlm's mixed_4_8 recipe: 4-bit, with the embedding/output head and some v_proj/down_proj layers at 8-bit.
+# and optional 8-/4-bit MLX conversions.   ./setup.sh [q8] [q4]
 # H2O_REVISION overrides the pin (v1.2.3 = the previous, one-way-only release). Each folder records the revision it
 # was built from; a folder from another revision stops the script instead of being mixed with new files.
 set -euo pipefail
@@ -25,10 +24,7 @@ mkdir -p model && echo "$REV" > model/.h2o_revision     # stamped first, so an i
 (cd model && ../.venv/bin/python test_shim.py)
 for b in ${@+"$@"}; do
   bits=${b#q}; [ -f "mlx-q$bits/config.json" ] && continue
-  case "$bits" in
-    4m) .venv/bin/python -m mlx_vlm convert --hf-path model --mlx-path "mlx-q$bits" -q --q-group-size 64 --quant-predicate mixed_4_8 ;;
-    *)  .venv/bin/python -m mlx_vlm convert --hf-path model --mlx-path "mlx-q$bits" -q --q-bits "$bits" --q-group-size 64 ;;
-  esac
+  .venv/bin/python -m mlx_vlm convert --hf-path model --mlx-path "mlx-q$bits" -q --q-bits "$bits" --q-group-size 64
   echo "$REV" > "mlx-q$bits/.h2o_revision"
 done
 echo "done (H2O $REV). start with: ./serve.sh   (or MODEL=mlx-q8 ./serve.sh; TWO_WAY=0 for one-way only)"
