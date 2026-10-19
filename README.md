@@ -1,6 +1,8 @@
 # H2O-Lightning-4B on Apple Silicon (MLX)
 
-Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text and images both work. The **official shim runs byte-for-byte unmodified**.
+Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text and images both work, and so does **two-way reading**, new in H2O v1.3. The **official shim runs byte-for-byte unmodified**.
+
+**Update, 19 October 2026:** this repo and the prebuilt weights now follow H2O-Lightning-4B **v1.3.1**, with two-way reading. The previous release (v1.2.3, one-way) stays available: `git checkout v1.2.3` here, and `--revision v1.2.3` on Hugging Face.
 
 This is, as far as we could find on 12 October 2026, the first public MLX build of H2O-Lightning-4B. Please tell us if you know of another.
 
@@ -15,25 +17,30 @@ client ──► shim :8741 (official, unmodified) ──► mlx_vllm_facade :87
           [optional h2o_front.py :8742: API key + a single-question /v1/decisions shape]
 ```
 
+## Two-way reading
+
+H2O-Lightning-4B v1.3 was trained to answer under two attention patterns: one-way (causal, as before) and two-way, where the full-attention layers see the whole prompt in both directions while the Gated DeltaNet layers stay causal. Two-way is H2O's recommended default.
+
+The facade serves both from one engine. The shim runs in H2O's one-engine mode (`SHIM_TWO_WAY_FLAG=1`, set by `serve.sh`) and marks each two-way request with `vllm_xargs.attention_mode`; the facade then runs that prompt with bidirectional attention on the full-attention layers, in one pass, and reads the answer slot exactly as one-way does. Before its first two-way answer, the shim checks the engine against the answers H2O recorded on the release weights (three fixed probes, tolerance 0.05). bf16 passes at 0.016 and 8-bit at 0.004.
+
+A request picks its mode with `"attention_mode": "two-way"` or `"one-way"`; without it, `serve.sh` answers two-way (`TWO_WAY=0` serves one-way only).
+
 ## Results (MacBook Pro M5 Max, 128 GB)
 
-JevBench public set (231 items), JevBench's own CLI at commit `bb05a33`, `--adapter typesafe`, the shipped `serve_config.json`:
+JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.3.1 with the shipped `serve_config.json`:
 
-| Checkpoint | Size | JevBench | easy / standard / hard | Same answer as bf16 | Probability drift vs bf16 (mean / p95) |
+| Checkpoint | Size | Two-way | One-way | Same answer as bf16 (two-way / one-way) | Probability drift vs bf16 (mean / p95) |
 |---|---|---|---|---|---|
-| model card (vLLM, NVIDIA) | 9.1 GB | **205 / 231** | 48/48 · 71/72 · 86/111 | — | — |
-| bf16, official weights (MLX) | 9.1 GB | 204 / 231 | 48/48 · 71/72 · 85/111 | — | — |
-| MLX 8-bit (g64) | 5.1 GB | **205 / 231** | 48/48 · 71/72 · 86/111 | 229 / 231 | 0.006 / 0.019 |
-| MLX 4-bit (g64) | 3.0 GB | 207 / 231 | 48/48 · 72/72 · 87/111 | 220 / 231 | 0.039 / 0.179 |
+| model card (vLLM, NVIDIA) | 9.3 GB | 203 / 231 | 198 / 231 | — | — |
+| bf16, official weights (MLX) | 9.3 GB | **205 / 231** | 198 / 231 | — | — |
+| MLX 8-bit (g64) | 5.1 GB | **203 / 231** | 199 / 231 | 228 / 231 · 230 / 231 | 0.004 / 0.010 |
+| MLX 4-bit (g64) | 3.0 GB | use 8-bit | 199 / 231 | — · 221 / 231 | 0.023 / 0.106 (one-way) |
 
-- **bf16 vs the card:** the one-item gap is `hard-sol-c-judge_hard-13`. It is one of the five near-tie items the model card names as sensitive to GPU numerics. The card's four expected near-tie misses miss here too.
-- **8-bit** stays very close to the original weights (mean probability drift 0.006). It changes 2 of 231 answers, both on near-ties, and halves the memory. **This is the recommended build.**
-- **4-bit** scores higher here, but that is noise. 11 answers flip in both directions, and the probabilities drift by up to 0.18 at p95. The model's selling point is calibration, so use 4-bit only when memory matters more than calibrated confidence.
+- **Two-way** is the stronger mode, as on H2O's card: +7 on bf16 and +4 on 8-bit, gained on the hard tier (bf16 87/111, 8-bit 85/111). Easy is 48/48 everywhere.
+- **8-bit** stays very close to the original weights in both modes and halves the memory. **This is the recommended build.**
+- **4-bit** is for one-way reading (`TWO_WAY=0`). For two-way reading, use the 8-bit build.
 
-Parity against a PyTorch reference (the same safetensors through `transformers`, float32 head) on 20 JevBench prompts:
-- The top answer agreed on 20 of 20. The maximum probability difference was 0.016 (mean 0.003).
-- On the receipt image, the image tokens are identical (481 tokens, grid 1×42×36), and the probability difference is 0.001.
-- Image check through the unchanged shim, on all three builds: H2O's receipt example gives the same answers as the model card shows, and a small generated-image set (counting circles, colours, reading a table) passes on bf16 and 8-bit (80 of 80 answers right); 4-bit is slightly weaker at counting (28 of 30). This is not a reproduction of H2O's image benchmark.
+Image check through the unchanged shim: H2O's receipt example gives the same answer on all three builds (bf16 and 8-bit 0.98 on the right option, 4-bit 0.88).
 
 Latency is for one 2,000-token record and one question, serial. The run is prefill-bound, so quantization barely changes it:
 
@@ -43,7 +50,7 @@ Latency is for one 2,000-token record and one question, serial. The run is prefi
 | image question (receipt) | 0.24–0.45 s | 0.24 s | 0.19 s |
 | MLX memory, active / peak | 8.5 / 10.0 GB | 4.8 / 6.3 GB | 2.8 / 4.5 GB |
 
-Items around 650 tokens (the JevBench average) take about 0.06 s. These timings were measured on a machine that was also serving other models, so a quiet machine is somewhat faster.
+Items around 650 tokens (the JevBench average) take about 0.06 s in either mode (JevBench median 0.06–0.10 s per item). These timings were measured with the v1.2.3 weights on a machine that was also serving other models, so a quiet machine is somewhat faster.
 
 ## Quick start
 
@@ -61,7 +68,7 @@ curl -s http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -
      "criteria": {"p1": "Revenue path fully down", "p2": "Degraded but working", "p3": "Cosmetic"}}}}'
 ```
 
-The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.2.3, which `setup.sh` pins. The 8-bit build was also checked with H2O's `main` shim as of 16 October 2026 (`test_shim.py` passes, 205 / 231 on JevBench, same image results). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
+The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.3.1, which `setup.sh` pins (`test_shim.py` passes). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
 
 ### Optional front door
 `h2o_front.py` adds an API key and a `/v1/decisions` route for clients that send one question at a time:
@@ -73,7 +80,7 @@ H2O_API_KEY=… FRONT_PORT=8742 ./serve.sh
 The request is `{"state", "question": {...}}`. The response is `{type, choice|noul|score, probabilities, confidence, input_tokens, latency_ms}`. Set `H2O_DECISION_LOG=<dir>` to keep one JSON-lines file per day of answer statistics (type, option count, top probability; never the record text). `launchd/` has an example LaunchAgent.
 
 ### Is the confidence usable?
-VitaminC test split, 400 items (200 supported, 133 refuted, 67 not enough info), with the evidence sentence embedded in about 650 words of other text. H2O only, all three MLX builds:
+VitaminC test split, 400 items (200 supported, 133 refuted, 67 not enough info), with the evidence sentence embedded in about 650 words of other text. H2O v1.2.3, one-way, all three MLX builds:
 
 | Build | Accuracy | Brier (lower is better) | Calibration error (ECE) | AUROC |
 |---|---|---|---|---|
@@ -89,9 +96,8 @@ The facade keeps a prefix cache. When several questions share one record, the re
 
 ## Reproduce
 ```bash
-git clone https://github.com/fstandhartinger/jevbench && (cd jevbench && git checkout bb05a33)
-scripts/bench_jevbench.sh model bf16          # or: scripts/bench_jevbench.sh mlx-q8 q8
-.venv/bin/python scripts/compare_runs.py bench/jevbench-bf16-* bench/jevbench-q8-*
+git clone --depth 1 -b v1.2.1 https://github.com/fstandhartinger/jevbench jevbench
+scripts/bench_jevbench.sh model bf16 two-way      # or one-way; or: scripts/bench_jevbench.sh mlx-q8 q8 two-way
 uv pip install --python .venv/bin/python torch torchvision
 .venv/bin/python scripts/parity_check.py --model model --jevbench jevbench --n 20
 .venv/bin/python scripts/quant_check.py model mlx-q8 mlx-q4
@@ -102,7 +108,8 @@ uv pip install --python .venv/bin/python torch torchvision
 - **Serialized.** One MLX lock serves one forward pass at a time. That suits a single Mac, not high concurrency.
 - **Long prompts.** They are pre-filled in 4,096-token chunks. Chunking changes log-probabilities by at most a few hundredths (bf16 arithmetic).
 - **Idle release.** The weights load on first use and are released after `FACADE_IDLE_UNLOAD_S` idle seconds (0 keeps them resident).
-- **Tested versions.** mlx 0.32.3, mlx-vlm 0.7.6, transformers 5.19.0, macOS 26.7.
+- **Two-way prompts** are read in one pass without the prefix cache, since every position depends on the whole prompt.
+- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.1, H2O v1.3.1, macOS 26.7.
 - **Scope.** This repo is the decision model and its serving path. It does not include any product harness.
 
 ## Credits and license
