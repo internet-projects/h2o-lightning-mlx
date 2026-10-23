@@ -42,15 +42,16 @@ JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.3
 
 Image check through the unchanged shim: H2O's receipt example gives the same answer on all three builds (bf16 and 8-bit 0.98 on the right option, 4-bit 0.88).
 
-Latency is for one 2,000-token record and one question, serial. The run is prefill-bound, so quantization barely changes it:
+Speed on a quiet Mac: MacBook Pro M5 Max (128 GB), 23 October 2026, the published v1.3.1 builds through `serve.sh`, one request at a time, medians of 3. Times are from the client's side, so they include the shim and HTTP (1–2% of the total).
 
-| | bf16 | 8-bit | 4-bit |
+| | 8-bit two-way | 8-bit one-way | 4-bit one-way |
 |---|---|---|---|
-| read-out, p50 | 0.43 s | 0.42 s | 0.36 s |
-| image question (receipt) | 0.24–0.45 s | 0.24 s | 0.19 s |
-| MLX memory, active / peak | 8.5 / 10.0 GB | 4.8 / 6.3 GB | 2.8 / 4.5 GB |
+| JevBench, 120 items (median 130 tokens), per item | 66 ms | 68 ms | 61 ms |
+| one ~2,000-token record | 466 ms | 447 ms | 424 ms |
+| one 32K-token state | 15.8 s | 9.1 s | 8.6 s |
+| MLX peak memory at 4K / 16K / 32K tokens | 8.2 / 22.4 / 55.0 GB | 7.7 / 8.3 / 8.9 GB | 5.7 / 6.3 / 6.8 GB |
 
-Items around 650 tokens (the JevBench average) take about 0.06 s in either mode (JevBench median 0.06–0.10 s per item). These timings were measured with the v1.2.3 weights on a machine that was also serving other models, so a quiet machine is somewhat faster.
+The work is prefill-bound, so 4-bit is only slightly faster than 8-bit. Items of 500–800 tokens take about 0.15 s on 8-bit. **Two-way reads the whole prompt in one pass, so its memory grows much faster with long inputs** (55 GB at 32K tokens). For long inputs on a Mac with less than 64 GB, use one-way.
 
 ## Quick start
 
