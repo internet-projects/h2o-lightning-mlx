@@ -5,7 +5,7 @@
 # was built from; a folder from another revision stops the script instead of being mixed with new files.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-REV="${H2O_REVISION:-v1.3.1}"
+REV="${H2O_REVISION:-d42875078bafb155af14d609d85071091418e83f}"   # = H2O tag v1.4.0
 command -v uv >/dev/null || { echo "install uv first: brew install uv"; exit 1; }
 for d in model mlx-q*; do
   [ -d "$d" ] || continue

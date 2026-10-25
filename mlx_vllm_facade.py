@@ -6,8 +6,17 @@ It implements only what the shim calls on vLLM:
     POST /tokenize             -> {"prompt", "add_special_tokens"} or {"messages", "continue_final_message", ...}
     POST /detokenize           -> {"tokens"}
     POST /v1/completions       -> max_tokens=1 read-out: log-probabilities of `logprob_token_ids` at the next slot
-    POST /v1/chat/completions  -> the same read-out for a chat with images (continue_final_message)
+    POST /v1/chat/completions  -> the same read-out for a chat with images (continue_final_message), or, with a
+                                  `response_format` JSON schema, the guided Box generation (below)
     GET  /health
+
+BOX QUESTIONS (H2O v1.4+, always on): the shim asks for one greedy chat generation constrained to a small JSON schema
+(`{"bbox_2d": [x1, y1, x2, y2]}`, integers 0-1000, or the `box_2d` variant), with per-token logprobs. This facade
+constrains decoding to exactly that schema (a character-level grammar, checked token by token) and returns vLLM's
+chat-completion shape, including `logprobs.content[].top_logprobs`. The log-probabilities are the model's own (raw
+log-softmax over the whole vocabulary, before the grammar mask), as vLLM reports them. Any other `response_format` is
+refused with a 422 that names response_format, which the shim turns into its BOX_NEEDS_GUIDED answer for that
+question only.
 
 TWO-WAY READING (H2O v1.3+): a completion or chat request with `"vllm_xargs": {"attention_mode": "bidirectional"}`
 runs the prompt with bidirectional attention on the full-attention layers (the Gated DeltaNet layers stay causal) and
@@ -96,6 +105,61 @@ class HTTPError(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+# ---------------------------------------------------------------------------------------------- guided Box generation
+BOX_MAX_TOKENS = int(os.environ.get("FACADE_BOX_MAX_TOKENS", "48"))
+_WS = " \t\n\r"
+
+
+def box_schema_key(response_format):
+    """The array property name of a Box JSON schema ("bbox_2d" / "box_2d"), or an HTTPError(422) for anything else."""
+    rf = response_format if isinstance(response_format, dict) else {}
+    js = rf.get("json_schema") if rf.get("type") == "json_schema" else None
+    schema = js.get("schema") if isinstance(js, dict) else None
+    try:
+        props = schema["properties"]
+        (key, spec), = props.items()
+        items = spec["items"]
+        ok = (schema.get("type") == "object" and spec.get("type") == "array" and items.get("type") == "integer"
+              and items.get("minimum") == 0 and items.get("maximum") == 1000
+              and spec.get("minItems") == 4 and spec.get("maxItems") == 4 and schema.get("required") == [key])
+    except (TypeError, KeyError, AttributeError, ValueError):
+        ok = False
+    if not ok:
+        raise HTTPError(422, "response_format: this MLX engine supports only the Box JSON schema "
+                             "({\"<name>\": [4 integers 0-1000]}); other structured outputs are not available")
+    return key
+
+
+def box_scan(s, key):
+    """'bad' | 'partial' | 'complete' for text s against  {"<key>": [n, n, n, n]}  (JSON whitespace anywhere between
+    tokens, integers 0..1000 without leading zeros), the language of the Box schema."""
+    items = ["{", f'"{key}"', ":", "[", 0, ",", 0, ",", 0, ",", 0, "]", "}"]
+    i, n = 0, len(s)
+    for it in items:
+        while i < n and s[i] in _WS:
+            i += 1
+        if i == n:
+            return "partial"
+        if it == 0:
+            j = i
+            while j < n and s[j] in "0123456789":
+                j += 1
+            num = s[i:j]
+            if not num or (len(num) > 1 and num[0] == "0") or int(num) > 1000:
+                return "bad"
+            if j == n:
+                return "partial"
+            i = j
+        else:
+            seg = s[i:i + len(it)]
+            if not it.startswith(seg):
+                return "bad"
+            if len(seg) < len(it):
+                return "partial"
+            i += len(it)
+    return "complete" if not s[i:].strip(_WS) else "bad"
 
 
 class Engine:
@@ -251,6 +315,14 @@ class Engine:
         if len(ids) + 1 > MAX_MODEL_LEN:
             raise HTTPError(400, CONTEXT_MSG.format(m=MAX_MODEL_LEN, n=len(ids) + 1))
         h = self._final_hidden(ids, pixel_values, grid, bidirectional)
+        lp = self._log_softmax(h)
+        sel = lp[mx.array(wanted, dtype=mx.int32)]
+        top = int(mx.argmax(lp).item())
+        mx.eval(sel)
+        return [float(x) for x in sel.tolist()], top, float(lp[top].item())
+
+    def _log_softmax(self, h):
+        """Log-softmax over the whole vocabulary for one hidden state (the read-out the shim asks vLLM for)."""
         head = self.embed if self.lm_head is None else self.lm_head
         W = head.weight
         q = getattr(head, "scales", None) is not None          # a quantized (q8/q4) MLX checkpoint
@@ -274,10 +346,76 @@ class Engine:
         else:
             logits = (head.as_linear(h) if self.lm_head is None else head(h)).astype(mx.float32)
         lp = logits - mx.logsumexp(logits)
-        sel = lp[mx.array(wanted, dtype=mx.int32)]
-        top = int(mx.argmax(lp).item())
-        mx.eval(sel)
-        return [float(x) for x in sel.tolist()], top, float(lp[top].item())
+        mx.eval(lp)
+        return lp
+
+    # ------------------------------------------------------------------ guided Box generation
+    def _token_text(self, tid):
+        cache = getattr(self, "_tok_text", None)
+        if cache is None:
+            cache = self._tok_text = {}
+        t = cache.get(tid)
+        if t is None:
+            t = cache[tid] = self.tokenizer.decode([tid])
+        return t
+
+    def generate_box(self, ids, key, max_tokens, top_n, pixel_values=None, grid=None):
+        """Greedy decoding constrained to the Box schema. Returns (text, [(token_id, logprob, [(id, lp), ...]), ...],
+        finish_reason). One prefill (chunked, with the image features), then one cached step per token; text tokens
+        after the prompt continue the M-RoPE positions at max + 1, as the model's own position rule does."""
+        lm = self.model.language_model
+        input_ids = mx.array([ids], dtype=mx.int32)
+        if pixel_values is not None:
+            feats = self.model.get_input_embeddings(input_ids, pixel_values=pixel_values, image_grid_thw=grid)
+        else:
+            feats = self.model.get_input_embeddings(input_ids)
+        emb, pos = feats.inputs_embeds, feats.position_ids
+        if pos is None:
+            pos = mx.arange(len(ids), dtype=mx.int32)[None]
+        if pos.ndim == 2:
+            pos = mx.broadcast_to(pos[None], (3,) + tuple(pos.shape))
+        cache = lm.make_cache()
+        n = len(ids)
+        bounds = list(range(0, n, PREFILL_CHUNK)) + [n]
+        h = None
+        for s, e in zip(bounds[:-1], bounds[1:]):
+            h = lm.model(input_ids[:, s:e], inputs_embeds=emb[:, s:e], cache=cache, position_ids=pos[..., s:e])
+            mx.eval(h)
+        next_pos = int(mx.max(pos).item()) + 1
+        eos = set()
+        for t in (self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<|im_end|>")):
+            if isinstance(t, int):
+                eos.add(t)
+        text, out, finish = "", [], "length"
+        for _ in range(max(1, int(max_tokens))):
+            lp = self._log_softmax(h[0, -1])
+            order = mx.argsort(-lp)
+            chosen = None
+            for start in range(0, lp.shape[0], 4096):          # candidates in descending probability
+                for tid in order[start:start + 4096].tolist():
+                    if tid in eos:
+                        continue
+                    piece = self._token_text(tid)
+                    if piece and box_scan(text + piece, key) != "bad":
+                        chosen = tid
+                        break
+                if chosen is not None:
+                    break
+            if chosen is None:
+                raise HTTPError(500, "guided Box generation found no token that keeps the reply valid")
+            top_ids = order[:max(int(top_n), 1)].tolist() if top_n else []
+            lps = lp[mx.array(top_ids + [chosen], dtype=mx.int32)].tolist()
+            out.append((chosen, float(lps[-1]), list(zip(top_ids, [float(x) for x in lps[:-1]]))))
+            text += self._token_text(chosen)
+            if box_scan(text, key) == "complete":
+                finish = "stop"
+                break
+            tok = mx.array([[chosen]], dtype=mx.int32)
+            h = lm.model(tok, inputs_embeds=self.embed(tok), cache=cache,
+                         position_ids=mx.full((3, 1, 1), next_pos, dtype=mx.int32))
+            mx.eval(h)
+            next_pos += 1
+        return text, out, finish
 
     # ------------------------------------------------------------------ images
     @staticmethod
@@ -345,8 +483,11 @@ class Engine:
                 "usage": {"prompt_tokens": len(ids), "completion_tokens": 1, "total_tokens": len(ids) + 1}}
 
     def handle_chat(self, body):
+        if body.get("response_format") is not None:
+            return self.handle_box(body)
         if int(body.get("max_completion_tokens", body.get("max_tokens", 1)) or 1) != 1:
-            raise HTTPError(400, "this server only reads the next token (max_completion_tokens must be 1)")
+            raise HTTPError(400, "this server only reads the next token (max_completion_tokens must be 1), or "
+                                 "generates a Box reply under a response_format JSON schema")
         cont = bool(body.get("continue_final_message", False))
         text, urls = self.render_chat(body.get("messages") or [], body.get("add_generation_prompt", not cont),
                                       cont, body.get("chat_template_kwargs"))
@@ -370,6 +511,42 @@ class Engine:
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": self.tokenizer.decode([top])},
                              "logprobs": {"content": content}, "finish_reason": "length"}],
                 "usage": {"prompt_tokens": len(ids), "completion_tokens": 1, "total_tokens": len(ids) + 1}}
+
+    def handle_box(self, body):
+        """The Box grounding call: one guided generation at temperature 0, thinking off, with per-token logprobs."""
+        key = box_schema_key(body.get("response_format"))
+        if attention_mode(body):
+            raise HTTPError(400, "a Box generation is read one-way (vllm_xargs.attention_mode must not be bidirectional)")
+        if float(body.get("temperature", 0) or 0) != 0:
+            raise HTTPError(400, "the Box generation is greedy (temperature must be 0)")
+        max_tokens = min(int(body.get("max_completion_tokens", body.get("max_tokens", BOX_MAX_TOKENS)) or BOX_MAX_TOKENS),
+                         BOX_MAX_TOKENS)
+        top_n = int(body.get("top_logprobs") or 0) if body.get("logprobs") else 0
+        text_prompt, urls = self.render_chat(body.get("messages") or [], body.get("add_generation_prompt", True),
+                                             False, body.get("chat_template_kwargs"))
+        max_px = int((body.get("mm_processor_kwargs") or {}).get("max_pixels") or DEFAULT_MAX_PIXELS)
+        images = self.load_images(urls) if urls else []
+        with self.lock:
+            self.ensure_loaded()
+            self.last_used = time.time()
+            if urls:
+                ids, pv, grid = self.process_images(text_prompt, images, max_px)
+            else:
+                ids, pv, grid = self.encode(text_prompt, body.get("add_special_tokens", False)), None, None
+            if len(ids) + max_tokens > MAX_MODEL_LEN:
+                raise HTTPError(400, CONTEXT_MSG.format(m=MAX_MODEL_LEN, n=len(ids) + max_tokens))
+            text, toks, finish = self.generate_box(ids, key, max_tokens, top_n, pv, grid)
+            self.snapshot = self.last_ids = None              # the text prefix cache never spans a generation
+            self.last_used = time.time()
+        choice = {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": finish}
+        if body.get("logprobs"):
+            choice["logprobs"] = {"content": [
+                {"token": self._token_text(t), "logprob": lp,
+                 "top_logprobs": [{"token": self._token_text(a), "logprob": alp} for a, alp in alts]}
+                for t, lp, alts in toks]}
+        return {"id": "chatcmpl-mlx-box", "object": "chat.completion", "created": int(time.time()), "model": SERVED_NAME,
+                "choices": [choice],
+                "usage": {"prompt_tokens": len(ids), "completion_tokens": len(toks), "total_tokens": len(ids) + len(toks)}}
 
     def handle_tokenize(self, body):
         if "messages" in body:
@@ -405,7 +582,8 @@ def make_handler(engine):
                 return self.send(200, {"ok": True, "model": SERVED_NAME, "loaded": engine.model is not None,
                                        "loads": engine.loads, "backend": "mlx", "head_fp32": engine.head_fp32,
                                        "prefix_hits": engine.prefix_hits, "prefix_min": PREFIX_MIN,
-                                       "attention_modes": ["causal", "bidirectional"]})
+                                       "attention_modes": ["causal", "bidirectional"],
+                                       "structured_outputs": ["box json_schema"]})
             if p == "/v1/models":
                 return self.send(200, {"object": "list", "data": [{
                     "id": SERVED_NAME, "object": "model", "owned_by": "mlx-facade", "max_model_len": MAX_MODEL_LEN}]})
