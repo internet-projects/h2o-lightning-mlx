@@ -50,6 +50,20 @@ JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.4
 
 Image check through the unchanged shim, H2O's receipt example: "six item lines" at 0.94 on bf16 and 8-bit two-way (H2O's card: 0.94), and the same answer one-way on all three builds (0.94–0.95).
 
+## Speed and memory
+
+MacBook Pro M5 Max (128 GB), 25 October 2026: the v1.4.0 builds through `serve.sh`, everything else stopped, one request at a time, medians of 3. Times are from the client's side, so they include the shim and HTTP.
+
+| | 8-bit two-way | 8-bit one-way | 4-bit one-way |
+|---|---|---|---|
+| JevBench, 120 items (median 130 tokens), per item | 63 ms | 63 ms | 59 ms |
+| one ~2,000-token record | 448 ms | 388 ms | 350 ms |
+| one 4K-token record | 0.95 s | 0.81 s | 0.75 s |
+| one 32K-token state | 14.5 s | 7.7 s | 7.3 s |
+| MLX peak memory at 4K / 32K tokens | 8.2 / 55.0 GB | 7.7 / 8.9 GB | 5.7 / 6.8 GB |
+
+The work is prefill-bound, so 4-bit is only slightly faster than 8-bit. **Two-way reads the whole prompt in one pass, so its memory grows much faster with long inputs** (55 GB at 32K tokens). For long inputs on a Mac with less than 64 GB, use one-way.
+
 ## Quick start
 
 ```bash
