@@ -22,6 +22,7 @@ import sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(HERE)
 REV, OLD, BRANCH = "v1.4.0", "v1.3.1", "v1.4.0"
+REMOTE_BRANCH = "v1.4.0-update"   # not "v1.4.0": that name is the release tag
 H2O_COMMIT = "d42875078bafb155af14d609d85071091418e83f"     # h2oai/h2o-lightning-4b tag v1.4.0
 REMOTE, REMOTE_URL = "github", "https://github.com/internet-projects/h2o-lightning-mlx"
 BUILDS = [("netprojects/h2o-lightning-4b-mlx-q8", "mlx-q8", "hf_cards/q8.md"),
@@ -114,8 +115,8 @@ def main():
         print(f"{repo}: upload {len(fs)} files from {folder}/ ({size:.1f} GB) + {card} as README.md")
 
     gh_tags = remote_tags()
-    pushed = subprocess.run(["git", "rev-parse", "-q", "--verify", f"github/{BRANCH}"], capture_output=True, text=True).stdout.strip()
-    plan = [f"GitHub: push branch {BRANCH} ({head[:7]})" + (" (already pushed)" if pushed == head else ""),
+    pushed = subprocess.run(["git", "rev-parse", "-q", "--verify", f"github/{REMOTE_BRANCH}"], capture_output=True, text=True).stdout.strip()
+    plan = [f"GitHub: push branch {REMOTE_BRANCH} ({head[:7]})" + (" (already pushed)" if pushed == head else ""),
             f"GitHub: {OLD} tag " + ("present" if OLD in gh_tags else "MISSING (will tag current main)")]
     for repo, _, _ in BUILDS:
         tags = [t.name for t in api.list_repo_refs(repo).tags]
@@ -132,8 +133,8 @@ def main():
 
     # ---- 1. GitHub branch
     if pushed != head:
-        sh("git", "push", REMOTE, f"{head}:refs/heads/{BRANCH}")
-        print(f"GitHub: pushed {BRANCH}")
+        sh("git", "push", REMOTE, f"{head}:refs/heads/{REMOTE_BRANCH}")
+        print(f"GitHub: pushed {REMOTE_BRANCH}")
     if OLD not in gh_tags:
         git_tag(OLD, main_sha, "H2O-Lightning-4B v1.3.1 MLX port (two-way reading)")
 
