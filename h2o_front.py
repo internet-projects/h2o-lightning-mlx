@@ -6,7 +6,11 @@
     POST /v1/decisions            the gateway's existing single-question shape:
                                   {"model", "state", "question": {"type", "instructions", "criteria"}}
                                   -> {"model", "type", "confidence", "noul" | "choice"+"probabilities" |
-                                      "score"+"probabilities", "input_tokens", "engine", "latency_ms"}
+                                      "score"+"probabilities" | "box"+"present"+"found", "input_tokens", "engine",
+                                      "attention_mode", "latency_ms"}
+                                  Optional pass-through to the shim (H2O v1.4): "attention_mode" ("one-way" |
+                                  "two-way"; without it the deployment's default), "assets" (image references), and
+                                  the image keys "images" / "image" / "image_url" / "image_urls".
     GET  /v1/models               (auth)
     GET  /health                  (no auth; no secrets)
 
@@ -91,7 +95,7 @@ def to_systemone(body):
     if state is None:
         raise ValueError("Missing state (context/input are accepted aliases)")
     out = {"state": state, "questions": {"q": q}}
-    for k in ("images", "image", "image_url", "image_urls"):
+    for k in ("images", "image", "image_url", "image_urls", "assets", "attention_mode"):
         if k in body:
             out[k] = body[k]
     return out
@@ -101,7 +105,9 @@ def from_systemone(resp, t0):
     a = resp["answers"]["q"]
     typ = a["type"]
     out = {"model": PUBLIC_ID, "type": typ}
-    if typ == "noul":
+    if typ == "box":                       # H2O v1.4: a bounding box in fractions of the image
+        out.update(box=a.get("box"), confidence=a.get("confidence"), present=a.get("present"), found=a.get("found"))
+    elif typ == "noul":
         p = float(a["noul"])
         out.update(noul=p, confidence=max(p, 1 - p), probabilities={"true": p, "false": 1 - p})
         for k in ("threshold", "decision"):
@@ -115,7 +121,7 @@ def from_systemone(resp, t0):
         else:
             out.update(score=a["score"], legend=a.get("legend"))
     usage = resp.get("usage") or {}
-    out.update(input_tokens=usage.get("input_tokens", 0), engine=ENGINE,
+    out.update(input_tokens=usage.get("input_tokens", 0), engine=ENGINE, attention_mode=resp.get("attention_mode"),
                probability_source=resp.get("probability_source"),
                latency_ms=round((time.perf_counter() - t0) * 1000, 2))
     return out
@@ -159,7 +165,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/v1/models":
             return self.send(200, {"object": "list", "data": [{
                 "id": PUBLIC_ID, "object": "model", "alias_for": "h2oai/h2o-lightning-4b",
-                "endpoints": ["/v1/systemone", "/v1/decisions"], "capabilities": ["noul", "choice", "score"]}]})
+                "endpoints": ["/v1/systemone", "/v1/decisions"], "capabilities": ["noul", "choice", "score", "box"]}]})
         self.send(404, {"error": "not found"})
 
     def do_POST(self):

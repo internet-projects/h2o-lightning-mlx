@@ -1,6 +1,6 @@
 mlx>=0.32.3
-mlx-vlm>=0.7.6
-transformers>=5.19.0
+mlx-vlm>=0.7.8
+transformers>=5.20.0
 huggingface_hub>=1.33
 pillow
 numpy
