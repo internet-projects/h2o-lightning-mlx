@@ -29,7 +29,7 @@ BUILDS = [("netprojects/h2o-lightning-4b-mlx-q8", "mlx-q8", "hf_cards/q8.md"),
 # shipped with each build: weights, configs, tokenizer, H2O's shim with the modules it loads, label rows, the engine
 # checksum file and the receipt example; not H2O's test files or local caches
 SKIP = ["README.md", "test_*.py", "pytest.ini", "card_common.py", "label_rows.lightning", "engine/*", "card_report.json", "card_snapshot_*", "card_snapshot_*/*", "__pycache__/*", ".cache/*", "*/.cache/*", "*.pyc", ".DS_Store", "._*",
-        "recipe.json"]
+        "recipe.json", ".pytest_cache/*", "*/.pytest_cache/*"]
 COMMIT_MSG = "H2O-Lightning-4B v1.4.0 (previous build: v1.3.1 tag)"
 
 
