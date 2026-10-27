@@ -177,9 +177,14 @@ class Engine:
         cfg = json.load(open(os.path.join(self.path, "config.json")))
         self.head_fp32 = cfg.get("head_dtype", cfg.get("text_config", {}).get("head_dtype")) == "float32"
         self.image_token_id = cfg.get("image_token_id")
-        # the tokenizer is cheap and needed for /tokenize even while the weights are released
+        # the tokenizer is cheap and needed for /tokenize even while the weights are released. H2O v1.4.0.1+ ships the
+        # training tokenizer (Qwen2Tokenizer) in tokenizer/ (vLLM gets --tokenizer <model>/tokenizer from serve.sh):
+        # transformers 5.18+ would otherwise load Qwen3_5Tokenizer, which splits some Devanagari and Arabic text
+        # differently. The shim checks /tokenize against tokenizer_contract.json at start.
         from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.path)
+        tok_dir = os.path.join(self.path, "tokenizer")
+        self.tokenizer_path = tok_dir if os.path.isdir(tok_dir) else self.path
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
 
     # ------------------------------------------------------------------ lifecycle
     def ensure_loaded(self):
@@ -189,6 +194,8 @@ class Engine:
         t0 = time.time()
         model, processor = load(self.path)
         _install_two_way_patch()
+        if self.tokenizer_path != self.path and hasattr(processor, "tokenizer"):
+            processor.tokenizer = self.tokenizer      # image prompts are tokenized by the same training tokenizer
         self.model, self.processor = model, processor
         self.loads += 1
         lm = self.model.language_model
@@ -479,7 +486,8 @@ class Engine:
         return {"id": "cmpl-mlx", "object": "text_completion", "created": int(time.time()), "model": SERVED_NAME,
                 "choices": [{"index": 0, "text": self.tokenizer.decode([top]), "finish_reason": "length",
                              "logprobs": {"tokens": [f"token_id:{top}"], "token_logprobs": [top_lp],
-                                          "top_logprobs": [top_map], "text_offset": [0]}}],
+                                          "top_logprobs": [top_map], "text_offset": [0]},
+                             **({"prompt_token_ids": ids} if body.get("return_token_ids") else {})}],
                 "usage": {"prompt_tokens": len(ids), "completion_tokens": 1, "total_tokens": len(ids) + 1}}
 
     def handle_chat(self, body):
@@ -509,7 +517,8 @@ class Engine:
                     "top_logprobs": [{"token": f"token_id:{i}", "logprob": v} for i, v in zip(wanted, lps)]}]
         return {"id": "chatcmpl-mlx", "object": "chat.completion", "created": int(time.time()), "model": SERVED_NAME,
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": self.tokenizer.decode([top])},
-                             "logprobs": {"content": content}, "finish_reason": "length"}],
+                             "logprobs": {"content": content}, "finish_reason": "length",
+                             **({"prompt_token_ids": ids} if body.get("return_token_ids") else {})}],
                 "usage": {"prompt_tokens": len(ids), "completion_tokens": 1, "total_tokens": len(ids) + 1}}
 
     def handle_box(self, body):

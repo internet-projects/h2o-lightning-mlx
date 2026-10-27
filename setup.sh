@@ -5,7 +5,7 @@
 # was built from; a folder from another revision stops the script instead of being mixed with new files.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-REV="${H2O_REVISION:-d42875078bafb155af14d609d85071091418e83f}"   # = H2O tag v1.4.0
+REV="${H2O_REVISION:-cc18ee330e6895c41b9a60f37a0dd122dc4c3461}"   # = H2O tag v1.4.1
 command -v uv >/dev/null || { echo "install uv first: brew install uv"; exit 1; }
 for d in model mlx-q*; do
   [ -d "$d" ] || continue
@@ -27,4 +27,6 @@ for b in ${@+"$@"}; do
   .venv/bin/python -m mlx_vlm convert --hf-path model --mlx-path "mlx-q$bits" -q --q-bits "$bits" --q-group-size 64
   echo "$REV" > "mlx-q$bits/.h2o_revision"
 done
+# the training tokenizer (Qwen2Tokenizer, H2O v1.4.0.1+): the facade reads <MODEL>/tokenizer; the shim checks it at start
+for d in mlx-q*/; do [ -d model/tokenizer ] && [ ! -d "${d}tokenizer" ] && cp -R model/tokenizer "${d}tokenizer"; done
 echo "done (H2O $REV). start with: ./serve.sh   (or MODEL=mlx-q8 ./serve.sh; TWO_WAY=0 for one-way only)"

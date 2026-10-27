@@ -2,7 +2,7 @@
 
 Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text, images, **two-way reading** and **Box questions** (bounding boxes) all work. The **official shim runs byte-for-byte unmodified**.
 
-**Update, 25 October 2026:** this repo and the prebuilt weights now follow H2O-Lightning-4B **v1.4.0**, H2O's new fine-tune with images in its training data. On JevBench's 231 public items the 8-bit build scores **206 / 231 two-way, the same as H2O's own result on vLLM**. Box questions, always on since v1.4.0, are answered by a guided generation in the facade. Earlier releases stay available: `git checkout v1.3.1` or `v1.2.3` here, and `--revision v1.3.1` or `v1.2.3` on Hugging Face.
+**Update, 27 October 2026:** rebuilt from H2O-Lightning-4B **v1.4.1** (new upstream weights; H2O's calibration constants are unchanged). On JevBench's 231 public items the 8-bit build scores **205 / 231 two-way** (H2O's own result on vLLM: 206), with the same answer as the bf16 weights on all 231. The facade now reads text with the training tokenizer (Qwen2Tokenizer) that v1.4.1 ships in `tokenizer/`, and the shim's new tokenizer check passes. Earlier releases stay available: `git checkout v1.4.0`, `v1.3.1` or `v1.2.3` here, and the same `--revision` on Hugging Face.
 
 This is, as far as we could find on 12 October 2026, the first public MLX build of H2O-Lightning-4B. Please tell us if you know of another.
 
@@ -33,33 +33,33 @@ On H2O's receipt example, asked for the total-amount line, the 8-bit build retur
 
 ## Results (MacBook Pro M5 Max, 128 GB)
 
-JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.4.0 with the shipped `serve_config.json` (easy / standard / hard in brackets):
+JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.4.1 with the shipped `serve_config.json` (easy / standard / hard in brackets):
 
 | Checkpoint | Size | Two-way | One-way | Same answer as bf16 (two-way / one-way) | Probability drift vs bf16 (mean / p95) |
 |---|---|---|---|---|---|
-| H2O's model card (vLLM, NVIDIA) | 9.3 GB | 206 / 231 (48 · 72 · 86) | — | — | — |
-| bf16, official weights (MLX) | 9.3 GB | **206 / 231** (48 · 72 · 86) | 203 / 231 | — | — |
-| MLX 8-bit (g64) | 4.8 GB | **206 / 231** (48 · 72 · 86) | 202 / 231 | **231 / 231** · 230 / 231 | 0.002 / 0.012 (two-way) |
-| MLX 4-bit (g64) | 2.9 GB | use 8-bit | 202 / 231 | — · 222 / 231 | 0.039 / 0.165 (one-way) |
+| H2O's model card (vLLM, NVIDIA) | 9.3 GB | 206 / 231 (48 · 72 · 86) | 202 / 231 | — | — |
+| bf16, official weights (MLX) | 9.3 GB | **205 / 231** (48 · 72 · 85) | 201 / 231 | — | — |
+| MLX 8-bit (g64) | 4.8 GB | **205 / 231** (48 · 72 · 85) | 201 / 231 | **231 / 231** · **231 / 231** | 0.003 / 0.011 (two-way) |
+| MLX 4-bit (g64) | 2.9 GB | use 8-bit | 205 / 231 | — · 221 / 231 | 0.043 / 0.176 (one-way) |
 
-- **The original weights on MLX match H2O's own vLLM result exactly**, tier by tier.
-- **8-bit** gives the same answer as bf16 on all 231 items two-way and halves the memory. **This is the recommended build.**
-- **4-bit** is for one-way reading (`TWO_WAY=0`): H2O's start-up check refuses it for two-way (probe drift 0.079 against a tolerance of 0.05). For two-way reading, use the 8-bit build.
-- **One-way on v1.4.0** is new here (H2O hasn't published it yet): 203 on bf16, 202 on 8-bit and 4-bit.
-- H2O notes that v1.4.0 is weaker than v1.3.2 on retrieval (product-search relevance) and on choosing a function to call, and stronger on its held-out decision skills overall. v1.3.2 has the same weights as v1.3.1; if your work is mostly tool-call selection, compare on your own data, or stay on `v1.3.1`.
+- **The original weights on MLX are within one item of H2O's own vLLM result** in both modes (two-way 205 against 206, one-way 201 against 202), all on hard items.
+- **8-bit** gives the same answer as bf16 on all 231 items in both modes and halves the memory. **This is the recommended build.** Its two-way start-up check passes at 0.014 (bf16: 0.002; tolerance 0.05).
+- **4-bit** is for one-way reading (`TWO_WAY=0`): H2O's start-up check refuses it for two-way (probe drift 0.090 against a tolerance of 0.05). For two-way reading, use the 8-bit build.
+- **Against our v1.4.0 build** (8-bit, two-way), v1.4.1 gives the same answer on 230 of 231 items (one-way: 226 of 231).
+- H2O reports v1.4.1 as stronger than v1.4.0 on retrieval tasks and on six task families its added training data covers (including choosing a function to call and table fact checks), level on its held-out decision skills overall, and slightly weaker on language tasks. See H2O's card.
 
-Image check through the unchanged shim, H2O's receipt example: "six item lines" at 0.94 on bf16 and 8-bit two-way (H2O's card: 0.94), and the same answer one-way on all three builds (0.94–0.95).
+Image check through the unchanged shim, H2O's receipt example: "six item lines" at 0.92 two-way and 0.94 one-way on bf16 and 8-bit, and 0.94 one-way on 4-bit. The Box answer for the total-amount line is the same box on bf16 and 8-bit, at confidence 0.97.
 
 ## Speed and memory
 
-MacBook Pro M5 Max (128 GB), 25 October 2026: the v1.4.0 builds through `serve.sh`, everything else stopped, one request at a time, medians of 3. Times are from the client's side, so they include the shim and HTTP.
+MacBook Pro M5 Max (128 GB), 27 October 2026: the v1.4.1 builds through `serve.sh`, everything else stopped, one request at a time, medians of 3. Times are from the client's side, so they include the shim and HTTP.
 
 | | 8-bit two-way | 8-bit one-way | 4-bit one-way |
 |---|---|---|---|
 | JevBench, 120 items (median 130 tokens), per item | 63 ms | 63 ms | 59 ms |
-| one ~2,000-token record | 448 ms | 388 ms | 350 ms |
-| one 4K-token record | 0.95 s | 0.81 s | 0.75 s |
-| one 32K-token state | 14.5 s | 7.7 s | 7.3 s |
+| one ~2,000-token record | 456 ms | 388 ms | 356 ms |
+| one 4K-token record | 0.95 s | 0.81 s | 0.76 s |
+| one 32K-token state | 14.3 s | 7.8 s | 7.4 s |
 | MLX peak memory at 4K / 32K tokens | 8.2 / 55.0 GB | 7.7 / 8.9 GB | 5.7 / 6.8 GB |
 
 The work is prefill-bound, so 4-bit is only slightly faster than 8-bit. **Two-way reads the whole prompt in one pass, so its memory grows much faster with long inputs** (55 GB at 32K tokens). For long inputs on a Mac with less than 64 GB, use one-way.
@@ -69,7 +69,7 @@ The work is prefill-bound, so 4-bit is only slightly faster than 8-bit. **Two-wa
 ```bash
 brew install uv
 git clone https://github.com/internet-projects/h2o-lightning-mlx && cd h2o-lightning-mlx
-./setup.sh q8            # venv + official H2O repo at v1.4.0 (shim, config, weights) + an 8-bit conversion; runs test_shim.py
+./setup.sh q8            # venv + official H2O repo at v1.4.1 (shim, config, weights) + an 8-bit conversion; runs test_shim.py
 MODEL=mlx-q8 ./serve.sh  # or ./serve.sh for the official bf16 weights
 ```
 
@@ -80,7 +80,7 @@ curl -s http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -
      "criteria": {"p1": "Revenue path fully down", "p2": "Degraded but working", "p3": "Cosmetic"}}}}'
 ```
 
-The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.4.0, which `setup.sh` pins (`test_shim.py` and `test_security.py` pass). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
+The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.4.1, which `setup.sh` pins (`test_shim.py` and `test_security.py` pass). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
 
 ### Optional front door
 `h2o_front.py` adds an API key and a `/v1/decisions` route for clients that send one question at a time:
@@ -122,7 +122,8 @@ uv pip install --python .venv/bin/python torch torchvision
 - **Idle release.** The weights load on first use and are released after `FACADE_IDLE_UNLOAD_S` idle seconds (0 keeps them resident).
 - **Two-way prompts** are read in one pass without the prefix cache, since every position depends on the whole prompt.
 - **Box generation** is greedy and constrained to H2O's two box schemas (`bbox_2d` and `box_2d`); other structured-output requests get a 422, which the shim reports for that question only.
-- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.0, macOS 26.7.
+- **Tokenizer.** The facade reads `tokenizer/` (Qwen2Tokenizer, the training tokenizer, shipped by H2O since v1.4.0.1) when the model folder has it, for text and for image prompts; with transformers 5.18+ the default load would be Qwen3_5Tokenizer, which splits some Devanagari and Arabic text differently. The shim checks it at start against `tokenizer_contract.json` (24 probes).
+- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.1, macOS 26.7.
 - **Scope.** This repo is the decision model and its serving path. It does not include any product harness.
 
 ## Credits and license
