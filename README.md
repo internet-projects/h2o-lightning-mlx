@@ -42,7 +42,7 @@ JevBench public set (231 items), JevBench v1.2.1, `--adapter typesafe`, H2O v1.4
 | MLX 8-bit (g64) | 4.8 GB | **205 / 231** (48 · 72 · 85) | 201 / 231 | **231 / 231** · **231 / 231** | 0.003 / 0.011 (two-way) |
 | MLX 4-bit (g64) | 2.9 GB | use 8-bit | 205 / 231 | — · 221 / 231 | 0.043 / 0.176 (one-way) |
 
-- **The original weights on MLX are within one item of H2O's own vLLM result** in both modes (two-way 205 against 206, one-way 201 against 202), all on hard items.
+- **The original weights on MLX are within one item of H2O's own vLLM result** in both modes (two-way 205 against 206, one-way 201 against 202), all on hard items. The difference is a handful of hard items where the top two answers are almost tied, so arithmetic precision decides them: the same weights with every layer in float32 score 207 / 231 two-way.
 - **8-bit** gives the same answer as bf16 on all 231 items in both modes and halves the memory. **This is the recommended build.** Its two-way start-up check passes at 0.014 (bf16: 0.002; tolerance 0.05).
 - **4-bit** is for one-way reading (`TWO_WAY=0`): H2O's start-up check refuses it for two-way (probe drift 0.090 against a tolerance of 0.05). For two-way reading, use the 8-bit build.
 - **Against our v1.4.0 build** (8-bit, two-way), v1.4.1 gives the same answer on 230 of 231 items (one-way: 226 of 231).
