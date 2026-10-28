@@ -2,6 +2,8 @@
 
 Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text, images, **two-way reading** and **Box questions** (bounding boxes) all work. The **official shim runs byte-for-byte unmodified**.
 
+**Update, 28 October 2026:** H2O revised v1.4.1 in place (commit `d7f1b05a`; the weights are unchanged, so the MLX builds were not reconverted). `setup.sh` now pins the revised release, which adds `selector_v2.py`: an over-long record is trimmed to fit the context by BM25 selection instead of a fixed cut at 32,000 tokens, so a request never fails for length (on a 60,000-token test record with one key line in the middle, the 8-bit build now answers correctly with confidence 0.97). Image answers are read at temperature 1.0 instead of 0.65: the same top answers, lower confidence values. Text requests that fit the context are read exactly as before. The original v1.4.1 files: `git checkout v1.4.1-initial` here and `--revision v1.4.1-initial` on Hugging Face.
+
 **Update, 27 October 2026:** rebuilt from H2O-Lightning-4B **v1.4.1** (new upstream weights; H2O's calibration constants are unchanged). On JevBench's 231 public items the 8-bit build scores **205 / 231 two-way** (H2O's own result on vLLM: 206), with the same answer as the bf16 weights on all 231. The facade now reads text with the training tokenizer (Qwen2Tokenizer) that v1.4.1 ships in `tokenizer/`, and the shim's new tokenizer check passes. Earlier releases stay available: `git checkout v1.4.0`, `v1.3.1` or `v1.2.3` here, and the same `--revision` on Hugging Face.
 
 This is, as far as we could find on 12 October 2026, the first public MLX build of H2O-Lightning-4B. Please tell us if you know of another.
@@ -118,12 +120,13 @@ uv pip install --python .venv/bin/python torch torchvision
 ## Notes and limits
 - **Calibration is what H2O is for.** JevBench measures accuracy. Confidence values are only useful if you check them on your own data.
 - **Serialized.** One MLX lock serves one forward pass at a time. That suits a single Mac, not high concurrency.
+- **Over-long records.** A record that would not fit the context (40,960 tokens) is trimmed by H2O's BM25 selection (`selector_v2.py`, since the 28 October revision of v1.4.1); the question and its options are always kept whole.
 - **Long prompts.** They are pre-filled in 4,096-token chunks. Chunking changes log-probabilities by at most a few hundredths (bf16 arithmetic).
 - **Idle release.** The weights load on first use and are released after `FACADE_IDLE_UNLOAD_S` idle seconds (0 keeps them resident).
 - **Two-way prompts** are read in one pass without the prefix cache, since every position depends on the whole prompt.
 - **Box generation** is greedy and constrained to H2O's two box schemas (`bbox_2d` and `box_2d`); other structured-output requests get a 422, which the shim reports for that question only.
 - **Tokenizer.** The facade reads `tokenizer/` (Qwen2Tokenizer, the training tokenizer, shipped by H2O since v1.4.0.1) when the model folder has it, for text and for image prompts; with transformers 5.18+ the default load would be Qwen3_5Tokenizer, which splits some Devanagari and Arabic text differently. The shim checks it at start against `tokenizer_contract.json` (24 probes).
-- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.1, macOS 26.7.
+- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.1 (28 October revision), macOS 26.7.
 - **Scope.** This repo is the decision model and its serving path. It does not include any product harness.
 
 ## Credits and license
