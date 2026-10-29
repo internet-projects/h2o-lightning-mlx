@@ -455,10 +455,12 @@ class Engine:
 
     def process_images(self, text, images, max_pixels):
         ip = self.processor.image_processor
-        min_px = (getattr(ip, "size", None) or {}).get("shortest_edge", 65536)
+        min_px = getattr(ip, "min_pixels", None) or (getattr(ip, "size", None) or {}).get("shortest_edge", 65536)
         try:
+            # mlx-vlm's Qwen3-VL image processor takes max_pixels / min_pixels (a `size` argument is ignored by it), so
+            # the shim's cap (mm_processor_kwargs.max_pixels) resizes exactly as vLLM's smart_resize does
             out = self.processor(text=[text], images=images, return_tensors="np",
-                                 size={"longest_edge": int(max_pixels), "shortest_edge": int(min_px)})
+                                 max_pixels=int(max_pixels), min_pixels=int(min_px))
         except Exception as e:
             raise HTTPError(422, f"image preprocessing failed: {type(e).__name__}: {e}")
         ids = [int(x) for x in out["input_ids"][0]]

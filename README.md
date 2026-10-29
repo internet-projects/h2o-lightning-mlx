@@ -2,6 +2,8 @@
 
 Run [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b), H2O.ai's calibrated decision model, on a Mac with MLX. Text, images, **two-way reading** and **Box questions** (bounding boxes) all work. The **official shim runs byte-for-byte unmodified**.
 
+**Update, 29 October 2026:** H2O-Lightning-4B **v1.4.2** (commit `708e939`; weights unchanged since v1.4.1, so no reconversion, new serving files). Yes/no answers are served without the 0.801 floor by default; `PROFILE=di ./serve.sh` gives H2O's Decision Index profile (the floor plus a conditional re-read of choice and score questions under 0.8). Images up to 1,638,400 pixels are read whole, and the facade now applies the shim's image size cap exactly as vLLM does: before, it read every image at its full size, so images over the cap took more tokens than on vLLM. A request may give the attention mode as `kwargs.attention_mode`, and a client that disconnects early no longer leaves an error in the log. On JevBench the 8-bit build still scores 205 / 231 two-way and 201 / 231 one-way, with the same 231 answers as before. The 28 October files: `--revision v1.4.1-oct28` on Hugging Face.
+
 **Update, 28 October 2026:** H2O revised v1.4.1 in place (commit `d7f1b05a`; the weights are unchanged, so the MLX builds were not reconverted). `setup.sh` now pins the revised release, which adds `selector_v2.py`: an over-long record is trimmed to fit the context by BM25 selection instead of a fixed cut at 32,000 tokens, so a request never fails for length (on a 60,000-token test record with one key line in the middle, the 8-bit build now answers correctly with confidence 0.97). Image answers are read at temperature 1.0 instead of 0.65: the same top answers, lower confidence values. Text requests that fit the context are read exactly as before. The original v1.4.1 files: `git checkout v1.4.1-initial` here and `--revision v1.4.1-initial` on Hugging Face.
 
 **Update, 27 October 2026:** rebuilt from H2O-Lightning-4B **v1.4.1** (new upstream weights; H2O's calibration constants are unchanged). On JevBench's 231 public items the 8-bit build scores **205 / 231 two-way** (H2O's own result on vLLM: 206), with the same answer as the bf16 weights on all 231. The facade now reads text with the training tokenizer (Qwen2Tokenizer) that v1.4.1 ships in `tokenizer/`, and the shim's new tokenizer check passes. Earlier releases stay available: `git checkout v1.4.0`, `v1.3.1` or `v1.2.3` here, and the same `--revision` on Hugging Face.
@@ -82,7 +84,7 @@ curl -s http://127.0.0.1:8741/v1/systemone -H 'Content-Type: application/json' -
      "criteria": {"p1": "Revenue path fully down", "p2": "Degraded but working", "p3": "Cosmetic"}}}}'
 ```
 
-The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). Everything above was measured with the shim at H2O revision v1.4.1, which `setup.sh` pins (`test_shim.py` and `test_security.py` pass). For production routing, start with `SHIM_NOUL_FLOOR=0` so yes/no answers keep their raw probability (the card's "routing mode").
+The API, image input, status codes and routing thresholds are exactly as on the [model card](https://huggingface.co/h2oai/h2o-lightning-4b). `setup.sh` pins H2O v1.4.2 (`test_shim.py` and `test_security.py` pass: 109 tests). Since v1.4.2 yes/no answers keep their raw probability by default (the card's "routing mode"); `PROFILE=di` or `SHIM_NOUL_FLOOR=0.801` restores the floor.
 
 ### Optional front door
 `h2o_front.py` adds an API key and a `/v1/decisions` route for clients that send one question at a time:
@@ -125,8 +127,9 @@ uv pip install --python .venv/bin/python torch torchvision
 - **Idle release.** The weights load on first use and are released after `FACADE_IDLE_UNLOAD_S` idle seconds (0 keeps them resident).
 - **Two-way prompts** are read in one pass without the prefix cache, since every position depends on the whole prompt.
 - **Box generation** is greedy and constrained to H2O's two box schemas (`bbox_2d` and `box_2d`); other structured-output requests get a 422, which the shim reports for that question only.
+- **Image size.** The facade resizes each image to the shim's `max_pixels` (1,638,400 since v1.4.2) with the processor's own smart-resize, as vLLM does; smaller images are read as they are.
 - **Tokenizer.** The facade reads `tokenizer/` (Qwen2Tokenizer, the training tokenizer, shipped by H2O since v1.4.0.1) when the model folder has it, for text and for image prompts; with transformers 5.18+ the default load would be Qwen3_5Tokenizer, which splits some Devanagari and Arabic text differently. The shim checks it at start against `tokenizer_contract.json` (24 probes).
-- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.1 (28 October revision), macOS 26.7.
+- **Tested versions.** mlx 0.32.4, mlx-vlm 0.7.8, transformers 5.20.2, H2O v1.4.2, macOS 26.7.
 - **Scope.** This repo is the decision model and its serving path. It does not include any product harness.
 
 ## Credits and license

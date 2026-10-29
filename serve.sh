@@ -10,6 +10,9 @@
 # Env: FACADE_PORT (8743), PORT (8741, the shim), SHIM_NOUL_FLOOR (unset = as shipped; 0 = routing mode),
 #      SHIM_ATTENTION_MODE (the default mode with TWO_WAY=1: bidirectional | causal),
 #      FACADE_IDLE_UNLOAD_S (0 = keep the weights resident), H2O_HOSTS (front bind addresses, default 127.0.0.1)
+# PROFILE=di (H2O v1.4.2+, as upstream serve.sh): the Decision Index profile, the shim's conditional re-read (a choice or
+#      score question under 0.8 top probability is read again with the input written twice, 2:1 first-weighted) and the
+#      yes/no floor 0.801 it was measured with. Unset: the default serving.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 PY="${PY:-$HERE/.venv/bin/python}"; MODEL="${MODEL:-model}"
@@ -18,6 +21,11 @@ case "${TWO_WAY:-1}" in
   1) export SHIM_TWO_WAY_FLAG=1 ;;
   0) unset SHIM_TWO_WAY_FLAG ;;
   *) echo "TWO_WAY must be 0 or 1"; exit 1 ;;
+esac
+case "${PROFILE:-}" in
+  "") ;;
+  di) export SHIM_REREAD_BELOW="${SHIM_REREAD_BELOW:-0.8}" SHIM_NOUL_FLOOR="${SHIM_NOUL_FLOOR:-0.801}" ;;
+  *) echo "PROFILE must be di or unset"; exit 1 ;;
 esac
 [ -f model/h2o_lightning_shim.py ] || { echo "run ./setup.sh first (downloads the official repo into ./model)"; exit 1; }
 "$PY" mlx_vllm_facade.py --model "$MODEL" --port "$FACADE_PORT" & P1=$!

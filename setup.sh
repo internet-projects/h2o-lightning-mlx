@@ -5,13 +5,13 @@
 # was built from; a folder from another revision stops the script instead of being mixed with new files.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-REV="${H2O_REVISION:-d7f1b05aa0b4e789b3896116f309ef842440e260}"   # = H2O tag v1.4.1 (28 Oct 2026 revision)
-SAME_WEIGHTS="cc18ee330e6895c41b9a60f37a0dd122dc4c3461"   # v1.4.1 as first released (tag v1.4.1-initial): same weights, files refreshed below
+REV="${H2O_REVISION:-708e93926a034195d908e033fcb796c55398a6f5}"   # = H2O v1.4.2 (29 Oct 2026; tag v1.4.2 adds card edits only)
+SAME_WEIGHTS="cc18ee330e6895c41b9a60f37a0dd122dc4c3461 d7f1b05aa0b4e789b3896116f309ef842440e260"   # v1.4.1 (27 and 28 Oct): same weights, files refreshed below
 command -v uv >/dev/null || { echo "install uv first: brew install uv"; exit 1; }
 for d in model mlx-q*; do
   [ -d "$d" ] || continue
   have="$(cat "$d/.h2o_revision" 2>/dev/null || echo 'v1.2.x (no revision stamp)')"
-  if [ "$have" != "$REV" ] && [ "$have" = "$SAME_WEIGHTS" ] && [ -z "${H2O_REVISION:-}" ]; then
+  if [ "$have" != "$REV" ] && [[ " $SAME_WEIGHTS " == *" $have "* ]] && [ -z "${H2O_REVISION:-}" ]; then
     echo "$d/: same weights as $REV; refreshing H2O's files in place"; echo "$REV" > "$d/.h2o_revision"; continue
   fi
   if [ "$have" != "$REV" ]; then
