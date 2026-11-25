@@ -177,10 +177,10 @@ class Engine:
         cfg = json.load(open(os.path.join(self.path, "config.json")))
         self.head_fp32 = cfg.get("head_dtype", cfg.get("text_config", {}).get("head_dtype")) == "float32"
         self.image_token_id = cfg.get("image_token_id")
-        # the tokenizer is cheap and needed for /tokenize even while the weights are released. H2O v1.4.0.1+ ships the
-        # training tokenizer (Qwen2Tokenizer) in tokenizer/ (vLLM gets --tokenizer <model>/tokenizer from serve.sh):
-        # transformers 5.18+ would otherwise load Qwen3_5Tokenizer, which splits some Devanagari and Arabic text
-        # differently. The shim checks /tokenize against tokenizer_contract.json at start.
+        # the tokenizer is cheap and needed for /tokenize even while the weights are released. H2O ships the served
+        # tokenizer in tokenizer/ (vLLM gets --tokenizer <model>/tokenizer from serve.sh); since v1.4.4 it is the base
+        # model's own tokenizer.json as TokenizersBackend, read as written by every transformers version. The shim
+        # checks /tokenize against tokenizer_contract.json at start.
         from transformers import AutoTokenizer
         tok_dir = os.path.join(self.path, "tokenizer")
         self.tokenizer_path = tok_dir if os.path.isdir(tok_dir) else self.path
